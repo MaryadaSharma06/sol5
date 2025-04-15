@@ -4,8 +4,10 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.content.IntentSender;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
@@ -13,21 +15,18 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.result.ActivityResult;
-import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-
-import com.example.sol5.R;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -37,8 +36,10 @@ import java.util.Locale;
 public class MainActivity extends AppCompatActivity {
 
     private static final int PERMISSION_CODE = 101;
+    private static final int DELETE_PERMISSION_REQUEST = 200;
 
     private Uri selectedImageUri = null;
+    private Uri pendingDeleteUri = null;
 
     private ImageView imageView;
     private TextView imageDetails;
@@ -166,16 +167,48 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    private boolean isDeletableUri(Uri uri) {
+        return uri != null && uri.toString().startsWith("content://media/");
+    }
+
     private void deleteImage(Uri uri) {
         try {
-            getContentResolver().delete(uri, null, null);
-            Toast.makeText(this, "Image deleted", Toast.LENGTH_SHORT).show();
-            imageView.setImageDrawable(null);
-            imageDetails.setText("");
-            selectedImageUri = null;
-            deleteButton.setEnabled(false);
+            int rowsDeleted = getContentResolver().delete(uri, null, null);
+            if (rowsDeleted > 0) {
+                Toast.makeText(this, "Image deleted", Toast.LENGTH_SHORT).show();
+                imageView.setImageDrawable(null);
+                imageDetails.setText("");
+                selectedImageUri = null;
+                deleteButton.setEnabled(false);
+            } else {
+                throw new Exception("No rows deleted.");
+            }
+        } catch (SecurityException se) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && se instanceof android.app.RecoverableSecurityException) {
+                android.app.RecoverableSecurityException recoverableSecurityException = (android.app.RecoverableSecurityException) se;
+                IntentSender intentSender = recoverableSecurityException.getUserAction().getActionIntent().getIntentSender();
+                pendingDeleteUri = uri;
+                try {
+                    startIntentSenderForResult(intentSender, DELETE_PERMISSION_REQUEST, null, 0, 0, 0);
+                } catch (IntentSender.SendIntentException e) {
+                    Log.e("TAG", "SendIntentException: " + e.getMessage());
+                    Toast.makeText(this, "Error requesting delete permission", Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                Log.d("TAG", "Error deleting image: " + se.getMessage());
+                Toast.makeText(this, "Failed to delete image", Toast.LENGTH_SHORT).show();
+            }
         } catch (Exception e) {
+            Log.d("TAG", "Error deleting image: " + e.getMessage());
             Toast.makeText(this, "Failed to delete image", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == DELETE_PERMISSION_REQUEST && resultCode == Activity.RESULT_OK && pendingDeleteUri != null) {
+            deleteImage(pendingDeleteUri); // Try deleting again with permission
         }
     }
 
